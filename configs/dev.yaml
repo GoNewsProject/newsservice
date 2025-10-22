@@ -33,6 +33,6 @@ routes:
  - name: commentservice
    base_url: http://localhost:7000
  - name: apigateway
-   base_url: http://localhost:
+   base_url: http://localhost:5000
  - name: censor
    base_url: http:// localhost: 
