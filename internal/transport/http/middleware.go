@@ -38,9 +38,11 @@ func LoggingMiddleware(log *slog.Logger) func(http.Handler) http.Handler {
 			next.ServeHTTP(rw, r)
 
 			duration := time.Since(start)
+			requestID := GetRequestID(r.Context())
 
 			log.Info(
 				"HTTP request",
+				"request_id", requestID,
 				"method", r.Method,
 				"path", r.URL.Path,
 				"status", rw.statusCode,
@@ -79,4 +81,23 @@ func GetRequestID(ctx context.Context) string {
 		return id
 	}
 	return ""
+}
+
+// CORSMiddleware добавляет CORS заголовки. По умолчанию разрешает все источники.
+func CORSMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE,OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization,X-Request-With, X-Request-ID")
+			w.Header().Set("Vary", "Origin")
+
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
 }
