@@ -37,7 +37,7 @@ type DBConfig struct {
 	Host     string `yaml:"host"`
 	Port     string `yaml:"port"`
 	UserName string `yaml:"username"`
-	Password string `yaml:"password"`
+	Password int    `yaml:"password"`
 	DBName   string `yaml:"db_name"`
 	SSLMode  string `yaml:"sslmode"`
 }

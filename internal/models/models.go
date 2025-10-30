@@ -13,3 +13,13 @@ type NewsFullDetailed struct {
 	Link        string    `json:"link"`
 	Tag         []string  `json:"tag"`
 }
+
+// NewsFilter структура фильтра для поиска новостей
+type NewsFilter struct {
+	Category string    `json:"category,omitempty"`
+	Author   string    `json:"author,omitempty"`
+	Date     time.Time `json:"date,omitempty"`
+	Limit    int       `json:"limit,omitempty"`
+	Offset   int       `json:"offset,omitempty"`
+	OrderBy  string    `json:"order_by,omitempty"`
+}
