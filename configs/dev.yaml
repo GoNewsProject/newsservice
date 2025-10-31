@@ -1,38 +1,52 @@
 app:
-  name: ${APP_NAME}
-  env: ${APP_ENV}
-  version: ${APP_VERSION}
+  name: newsservice
   read_timeout: 10
   write_timeout: 10
   connect_timeout: 10
   processing_interval: "3m"
   feed_urls:
-    - url: "https://dev.to/feed"
-      name: "Dev.to"
-    - url: "https://ria.ru/export/rss2/index.xml"
-      name: "RIA"
-    - url: "https://www.kommersant.ru/RSS/news.xml"
-      name: "Kommersant"
+    - name: dev.to
+      url: https://dev.to/feed
+    - name: bbci.com
+      url: http://feeds.bbci.co.uk/news/rss.xml
+    - name: nytimes.com
+      url: https://rss.nytimes.com/services/xml/rss/nyt/World.xml
+    - name: ria.ru
+      url: https://ria.ru/export/rss2/index.xml
 
 http:
-  host: ${HTTP_HOST}
-  port: ${HTTP_PORT}
-
-database:
-  host: ${DB_HOST
-  port: ${DB_PORT}
-  user: ${DB_USER}
-  password: ${DB_PASSWORD}
-  sslmode: disable
+  host: 0.0.0.0
+  port: :6000
 
 logging:
-  level: ${LOGGING_LEVEL}
-  format: ${LOGGING_FORMAT}
+  level: debug
+  format: text
+
+database:
+  host: localhost
+  port: 5432
+  username: news
+  password: password
+  db_name: newsservice
+  sslmode: disable
+
+kafka:
+  brokers:
+    - localhost: 9092
+  topics:
+    news_input: news_input
+    news_list: news_list
+    news_detail: news_detail
+    filtered_content: filtered_content
+    filter_published: filter_published
+  consumer_groups:
+  api_ateway: api_gateway
+
+service:
+  address: ":6000"
 
 routes:
- - name: commentservice
-   base_url: http://localhost:7000
- - name: apigateway
-   base_url: http://localhost:5000
- - name: censor
-   base_url: http:// localhost: 
+  - name: apigateway
+    base_url: http://localhot:8080
+  - name: commentservice
+    base_url: http://localhost:7000    
