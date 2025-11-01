@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"newsservice/internal/domain"
 	"newsservice/internal/infrastructure/config"
 	"newsservice/internal/models"
 	"sync"
@@ -208,7 +209,73 @@ func (s *Storage) Close() {
 	s.isClosed = true
 }
 
-// TO DO: func (s *Storage) SaveNews(ctx context.Context, feed *domain.Feed) (int, error)
+func (s *Storage) SaveNews(ctx context.Context, feed *domain.Feed) (int, error) {
+	if len(feed.Items) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		s.log.Error("failed to start transaction", "error", err)
+		return 0, fmt.Errorf("failed to start transaction: %w", err)
+	}
+
+	//3. Обрабатываем ошибки и паники
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback(ctx)
+			panic(p)
+		} else if err != nil {
+			if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+				s.log.Error("Failed to rollback transaction", "error", rollbackErr)
+				return
+			}
+		}
+	}()
+
+	batch := &pgx.Batch{}
+	query := `
+	INSERT INTO news(
+	title, description, content, author, published_at, source, link)
+	VALUES($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (link) DO NOTHING);
+	`
+
+	//5. Обрабатываем новости из фида
+	savedCount := 0
+	for _, item := range feed.Items {
+		content := item.Description
+
+		batch.Queue(
+			query,
+			item.Title,
+			item.Description,
+			content,
+			nil,
+			item.PubDate,
+			feed.Title,
+			item.Link,
+			nil,
+		)
+		savedCount++
+	}
+	//6. Выполняем batch
+	batchResult := tx.SendBatch(ctx, batch)
+	if err := batchResult.Close(); err != nil {
+		s.log.Error("Failed to execute batch", "error", err)
+		return 0, fmt.Errorf("failed to execute batch: %w", err)
+	}
+	//7. Фиксируем транзакцию
+	if err := tx.Commit(ctx); err != nil {
+		s.log.Error("Failed to commit transaction", "error", err)
+		return 0, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	s.log.Info("News saved successfully",
+		slog.Int("items_saved", savedCount),
+		slog.String("source", feed.Title),
+	)
+
+	return savedCount, nil
+}
 
 // ---------------------------------------------------------------------------------------------------------------------------
 // Метод для выборки из БД всех новостей

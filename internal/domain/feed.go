@@ -9,6 +9,7 @@ type Item struct {
 	PubDate     time.Time
 }
 
+// TODO:Удолить лишние поля
 type Feed struct {
 	Title       string
 	Link        string

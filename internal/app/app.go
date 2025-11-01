@@ -8,21 +8,22 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"newsservice/internal/infrastructure/config"
 	"newsservice/internal/models"
-	"newsservice/internal/transport"
+	transport "newsservice/internal/transport/http"
+	"newsservice/storage"
 	"os"
 	"strings"
 	"time"
 
 	kfk "github.com/Fau1con/kafkawrapper"
 	"github.com/joho/godotenv"
-	"gorm.io/driver/postgres"
 )
 
 // Config содержит настройки приложения
 type Config struct {
 	RSSsources []string `json:"source"`
-	Interval   int      `json:"interval"`
+	Interval   int      `json:"processing_interval"`
 	Brokers    []string `json:"brokers"`
 	Topic      []string `json:"topic"`
 }
@@ -31,13 +32,22 @@ type Config struct {
 func Run() error {
 	ctxmain := context.Background()
 
-	// Подключение к новостной БД
-	pool, err := postgres.New()
+	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		log.Printf("Error DB connection: %v", err)
+		return fmt.Errorf("failed to loag config: %w", err)
+	}
+
+	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	// Подключение к новостной БД
+	pool, err := storage.NewStorage(*cfg, log)
+	if err != nil {
+		log.Error("Error DB connection", "error", err)
 		return err
 	}
-	defer pool.DB.Close()
+	defer pool.Close()
 
 	// Инициализация API
 	apiInstance := api.New(pool)
@@ -49,13 +59,15 @@ func Run() error {
 	}
 	consumer, err := kfk.NewConsumer([]string{kafkaBrokers}, "news_input")
 	if err != nil {
-		log.Printf("Kafka consumer creating error: %v\n", err)
+		log.Error("Kafka consumer creating error",
+			slog.Any("%v\n", err))
 		return err
 	}
 	producer, err := kfk.NewProducer([]string{kafkaBrokers})
-	log.Printf("Producer created! Broker: %v", kafkaBrokers)
+	log.Info("Producer created! Broker: %v", kafkaBrokers)
 	if err != nil {
-		log.Printf("Kafka creating producer error: %v\n", err)
+		log.Error("Kafka creating producer error",
+			slog.Any("%v\n", err))
 		return err
 	}
 
@@ -63,60 +75,62 @@ func Run() error {
 	newsStream := make(chan []models.NewsFullDetailed)
 	errorStream := make(chan error)
 
-	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
-
 	// Запуск парсеров RSS
-	for _, source := range config.RSSsources {
+	for _, source := range config.FeedURLs {
 		go asynParser(ctxmain, source, pool, newsStream, errorStream, config.Interval)
 	}
 
 	// Горутина для добавления новостей в БД
 	go func() {
 		for new := range errorStream {
-			log.Println("Error:", err)
+			log.Error("Error:", err)
 		}
 	}()
 
 	// Горутина для обработки Kafka сообщений
 	go func() {
 		for {
-			log.Println("Start getting message and redirecting")
+			log.Info("Start getting message and redirecting")
 			msg, err := consumer.GetMessages(ctxmain)
 			if err != nil {
-				log.Printf("Failed to read message fron Kafka: %v\n", err)
+				log.Error("Failed to read message fron Kafka",
+					slog.Any("%v\n", err))
 			}
 			data, err := sendRequestToLocalhost(string(msg.Value))
 			if err != nil {
-				log.Printf("Failed to read data from Kafka message: %v\n", err)
+				log.Error("Failed to read data from Kafka message",
+					slog.Any("%v\n", err))
 			}
 			// Маршрутизация по типам запросов
 			if strings.Contains(string(msg.Value), "/newsdetail") {
 				err := producer.SendMessage(ctxmain, config.Topic[1], data)
 				if err != nil {
-					log.Printf("Failedto write message to Kafka: %v\n", err)
+					log.Error("Failedto write message to Kafka",
+						slog.Any("%v\n", err))
 					return
 				}
 			}
 			if strings.Contains(string(msg.Value), "/newslist/?n=") {
 				err := producer.SendMessage(ctxmain, config.Topic[2], data)
 				if err != nil {
-					log.Printf("Failed to write message to Kafka: %v\n", err)
+					log.Error("Failed to write message to Kafka",
+						slog.Any("%v\n", err))
 					return
 				}
 			}
 			if strings.Contains(string(msg.Value), "/newslist/filtered/?category=") {
 				err := producer.SendMessage(ctxmain, config.Topic[3], data)
 				if err != nil {
-					log.Printf("Failed to write message to Kafka: %v\n", err)
+					log.Error("Failed to write message to Kafka",
+						slog.Any("%v\n", err))
 					return
 				}
 			}
 			if strings.Contains(string(msg.Value), "newslist/filtered/date/?date=") {
 				err := producer.SendMessage(ctxmain, config.Topic[4], data)
 				if err != nil {
-					log.Printf("Failed to write message to Kafka: %v\n", err)
+					log.Error("Failed to write message to Kafka",
+						slog.Any("%v\n", err))
 					return
 				}
 			}
@@ -125,17 +139,18 @@ func Run() error {
 
 	// Настройка роутера и middleware
 	var handler http.Handler = apiInstance.Router()
+	handler = transport.CORSMiddleware()(handler)
 	handler = transport.RequestIDMiddleware(handler)
 	handler = transport.LoggingMiddleware(log)(handler)
 
 	err = godotenv.Load()
 	if err != nil {
-		log.Fatalf("Failed to load .env file")
+		log.Error("Failed to load .env file")
 		return err
 	}
 	port := os.Getenv("PORT")
 
-	log.Printf("Server newsservice APP start working at port %v\n", port)
+	log.Info("Server newsservice APP start working at port %v\n", port)
 	return http.ListenAndServe(port, handler)
 }
 
@@ -195,14 +210,13 @@ func sendRequestToLocalhost(path string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body) // вместо ioutil.ReadAll Стоит ли ограничить разер файла?
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("Failed to read response: %v\n", err)
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("Unexpected response code: %d\n", resp.StatusCode)
-		// Нужен ли return?
 	}
 	return body, nil
 }

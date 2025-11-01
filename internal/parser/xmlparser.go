@@ -12,21 +12,21 @@ import (
 )
 
 type rssXML struct {
-	Channel channelXML `json:"channel"`
+	Channel channelXML `xml:"channel"`
 }
 
 type channelXML struct {
-	Title       string    `json:"title"`
-	Link        string    `json:"link"`
-	Description string    `json:"description"`
-	Items       []itemXML `json:"item"`
+	Title       string    `xml:"title"`
+	Link        string    `xml:"link"`
+	Description string    `xml:"description"`
+	Items       []itemXML `xml:"item"`
 }
 
 type itemXML struct {
-	Title       string `json:"title"`
-	Link        string `json:"link"`
-	Description string `json:"description"`
-	PubDate     string `json:"pubDate"`
+	Title       string `xml:"title"`
+	Link        string `xml:"link"`
+	Description string `xml:"description"`
+	PubDate     string `xml:"pubDate"`
 }
 
 type XMLParser struct {
