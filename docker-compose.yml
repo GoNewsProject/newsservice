@@ -1,0 +1,27 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres-newsservice
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: newsservice
+      POSTGRES_USER: news
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres_newsservice_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U news -d newsservice"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - newsservice-network
+
+volumes:
+  postgres_newsservice_data:
+    driver: local
+
+networks:
+  newsservice-network:
+    driver: bridge

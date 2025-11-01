@@ -28,12 +28,13 @@ func NewApi(db storage.NewsStorage, log *slog.Logger) *Api {
 
 // Метод регистратор endpoint-ов, настраивающий саброутинг.
 func (api *Api) endpoints() {
+	newsHandler := transport.NewNewsHandler(api.db)
 	//маршрут для возврата детальной информации о новости
-	api.mux.HandleFunc("/newsdetail/", transport.HandleDetailedNews())
+	api.mux.HandleFunc("/newsdetail/", newsHandler.HandleDetailedNews(api.ctx))
 	//маршрут для возврата списка новостей
-	api.mux.HandleFunc("/newslist/", transport.HandleGetNewsList())
+	api.mux.HandleFunc("/newslist/", newsHandler.HandleGetNewsList(api.ctx))
 	//маршрут для возврата списка  новостей отфильтрованных по контенту
-	api.mux.HandleFunc("/newslist/filtered/", transport.HandleFilterNewsByContent())
+	api.mux.HandleFunc("/newslist/filtered/", newsHandler.HandleFilterNewsByContent(api.ctx))
 	//маршрут для возврата списка новостей отфильтрованных по дате публикации
 	// api.mux.HandleFunc("/newslist/filtered/date/", transport.FilterNewsByPublishedHandler)
 }

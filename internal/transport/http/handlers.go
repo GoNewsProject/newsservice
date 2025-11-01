@@ -124,6 +124,11 @@ func (h *NewsHandler) HandleGetNewsList(ctx context.Context, c *kfk.Consumer) ht
 		}
 
 		totalResult, err := h.storage.GetNewsCount(ctx, filter)
+		if err != nil {
+			h.producer.SendMessage(ctx, "news_list", []byte("failed to get news count"))
+			httputils.RenderError(w, "failed to get news count", http.StatusInternalServerError)
+			return
+		}
 
 		paginator := pagination.New(totalResult, page)
 		if err := paginator.Validate(); err != nil {
@@ -145,7 +150,6 @@ func (h *NewsHandler) HandleGetNewsList(ctx context.Context, c *kfk.Consumer) ht
 			"Retrieved %d news on page %d/%d",
 			len(news), paginator.CurrentPage, paginator.TotalPages,
 		)))
-
 		httputils.RenderJSON(w, paginator, http.StatusOK)
 	}
 }
@@ -218,6 +222,11 @@ func (h *NewsHandler) HandleFilterNewsByContent(ctx context.Context, c *kfk.Cons
 		}
 
 		totalResult, err := h.storage.GetNewsCount(ctx, filter)
+		if err != nil {
+			h.producer.SendMessage(ctx, "filtered_content", []byte("failed to get news count"))
+			httputils.RenderError(w, "failed to get news count", http.StatusInternalServerError)
+			return
+		}
 
 		paginator := pagination.New(totalResult, page)
 		if err := paginator.Validate(); err != nil {

@@ -11,7 +11,6 @@ type NewsFullDetailed struct {
 	PublishedAt time.Time `json:"published_at"`
 	Source      string    `json:"source"`
 	Link        string    `json:"link"`
-	Tag         []string  `json:"tag"`
 }
 
 // NewsFilter структура фильтра для поиска новостей
