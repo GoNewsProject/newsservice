@@ -2,43 +2,39 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"log/slog"
 	"net/http"
+	"newsservice/api"
 	"newsservice/internal/infrastructure/config"
 	"newsservice/internal/models"
+	"newsservice/internal/rss"
 	transport "newsservice/internal/transport/http"
 	"newsservice/storage"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	kfk "github.com/Fau1con/kafkawrapper"
-	"github.com/joho/godotenv"
 )
-
-// Config содержит настройки приложения
-type Config struct {
-	RSSsources []string `json:"source"`
-	Interval   int      `json:"processing_interval"`
-	Brokers    []string `json:"brokers"`
-	Topic      []string `json:"topic"`
-}
 
 // Run запускает приложение Newsservice
 func Run() error {
 	ctxmain := context.Background()
 
-	cfg, err := config.LoadConfig(configPath)
+	cfg, err := config.LoadConfig("config/dev.yaml")
 	if err != nil {
 		return fmt.Errorf("failed to loag config: %w", err)
 	}
 
+	ctxMain, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
+		Level: slog.LevelDebug, // cfg.logging.level
 	}))
 
 	// Подключение к новостной БД
@@ -50,21 +46,22 @@ func Run() error {
 	defer pool.Close()
 
 	// Инициализация API
-	apiInstance := api.New(pool)
+	apiInstance := api.NewApi(ctxMain, http.NewServeMux(), pool, log)
 
 	// Инициализация Kafka клиентов
-	kafkaBrokers := os.Getenv("KAFKA_BROKERS")
-	if kafkaBrokers == "" {
-		kafkaBrokers = "kafka:9093"
+	kafkaBrokers := cfg.Kafka.Brokers
+	if len(kafkaBrokers) == 0 {
+		kafkaBrokers[0] = "kafka:9093"
 	}
-	consumer, err := kfk.NewConsumer([]string{kafkaBrokers}, "news_input")
+	consumer, err := kfk.NewConsumer(kafkaBrokers, "news_input")
 	if err != nil {
 		log.Error("Kafka consumer creating error",
 			slog.Any("%v\n", err))
 		return err
 	}
-	producer, err := kfk.NewProducer([]string{kafkaBrokers})
-	log.Info("Producer created! Broker: %v", kafkaBrokers)
+	producer, err := kfk.NewProducer(kafkaBrokers)
+	log.Info("Producer created! Broker: ",
+		slog.Any("%v", kafkaBrokers))
 	if err != nil {
 		log.Error("Kafka creating producer error",
 			slog.Any("%v\n", err))
@@ -76,14 +73,21 @@ func Run() error {
 	errorStream := make(chan error)
 
 	// Запуск парсеров RSS
-	for _, source := range config.FeedURLs {
-		go asynParser(ctxmain, source, pool, newsStream, errorStream, config.Interval)
+	for _, source := range cfg.App.FeedURLs {
+		go asynParser(source.URL, newsStream, errorStream, int(cfg.GetAppProcesingInterval()))
 	}
 
 	// Горутина для добавления новостей в БД
 	go func() {
-		for new := range errorStream {
-			log.Error("Error:", err)
+		for new := range newsStream {
+			pool.AddNews(ctxMain, new)
+		}
+	}()
+
+	// Горутина для обработки ошибок
+	go func() {
+		for err := range errorStream {
+			log.Error("news parsing error", "error", err)
 		}
 	}()
 
@@ -93,47 +97,47 @@ func Run() error {
 			log.Info("Start getting message and redirecting")
 			msg, err := consumer.GetMessages(ctxmain)
 			if err != nil {
-				log.Error("Failed to read message fron Kafka",
+				log.Error("failed to read message fron Kafka",
 					slog.Any("%v\n", err))
 			}
 			data, err := sendRequestToLocalhost(string(msg.Value))
 			if err != nil {
-				log.Error("Failed to read data from Kafka message",
+				log.Error("failed to read data from Kafka message",
 					slog.Any("%v\n", err))
 			}
 			// Маршрутизация по типам запросов
 			if strings.Contains(string(msg.Value), "/newsdetail") {
-				err := producer.SendMessage(ctxmain, config.Topic[1], data)
+				err := producer.SendMessage(ctxMain, cfg.Kafka.Topics.NewsDetail, data)
 				if err != nil {
-					log.Error("Failedto write message to Kafka",
+					log.Error("failed to write message to Kafka",
 						slog.Any("%v\n", err))
 					return
 				}
 			}
 			if strings.Contains(string(msg.Value), "/newslist/?n=") {
-				err := producer.SendMessage(ctxmain, config.Topic[2], data)
+				err := producer.SendMessage(ctxmain, cfg.Kafka.Topics.NewsList, data)
 				if err != nil {
-					log.Error("Failed to write message to Kafka",
+					log.Error("failed to write message to Kafka",
 						slog.Any("%v\n", err))
 					return
 				}
 			}
 			if strings.Contains(string(msg.Value), "/newslist/filtered/?category=") {
-				err := producer.SendMessage(ctxmain, config.Topic[3], data)
+				err := producer.SendMessage(ctxmain, cfg.Kafka.Topics.FilteredContent, data)
 				if err != nil {
 					log.Error("Failed to write message to Kafka",
 						slog.Any("%v\n", err))
 					return
 				}
 			}
-			if strings.Contains(string(msg.Value), "newslist/filtered/date/?date=") {
-				err := producer.SendMessage(ctxmain, config.Topic[4], data)
-				if err != nil {
-					log.Error("Failed to write message to Kafka",
-						slog.Any("%v\n", err))
-					return
-				}
-			}
+			// if strings.Contains(string(msg.Value), "newslist/filtered/date/?date=") {
+			// 	err := producer.SendMessage(ctxmain, config.Topic[4], data)
+			// 	if err != nil {
+			// 		log.Error("Failed to write message to Kafka",
+			// 			slog.Any("%v\n", err))
+			// 		return
+			// 	}
+			// }
 		}
 	}()
 
@@ -143,41 +147,13 @@ func Run() error {
 	handler = transport.RequestIDMiddleware(handler)
 	handler = transport.LoggingMiddleware(log)(handler)
 
-	err = godotenv.Load()
-	if err != nil {
-		log.Error("Failed to load .env file")
-		return err
-	}
-	port := os.Getenv("PORT")
-
-	log.Info("Server newsservice APP start working at port %v\n", port)
-	return http.ListenAndServe(port, handler)
-}
-
-// parseConfigFile парсит JSON файл с настройками
-func parseConfigFile(filename string) (Config, error) {
-	var data []byte
-	configFile, err := os.Open(filename)
-	if err != nil {
-		log.Printf("Failed to open config file: %v\n", err)
-		return Config{}, err
-	}
-	defer configFile.Close()
-
-	data, err = os.ReadFile("./config.json")
-	if err != nil {
-		log.Fatal(err)
-	}
-	var config Config
-	if err := json.Unmarshal(data, &config); err != nil {
-		log.Printf("Failed to unmarshal config: %v\n", err)
-		return Config{}, err
-	}
-	return config, nil
+	log.Info("Server newsservice APP start working at port",
+		slog.Any("%v\n", cfg.HTTP.Port))
+	return http.ListenAndServe(":"+strconv.Itoa(cfg.HTTP.Port), handler)
 }
 
 // asynParser асинхронно обрабатывает RSS-ленты
-func asynParser(ctx context.Context, source string, db DB.DBInterface, news chan<- []models.NewsFullDetailed, errs chan<- error, interval int) {
+func asynParser(source string, news chan<- []models.NewsFullDetailed, errs chan<- error, interval int) {
 	for {
 		rssnews, err := rss.Parse(source)
 		if err != nil {

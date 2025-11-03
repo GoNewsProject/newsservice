@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"newsservice/internal/domain"
 	"newsservice/internal/infrastructure/config"
 	"newsservice/internal/models"
 	"sync"
@@ -107,7 +106,7 @@ func (s *Storage) GetDetailedNews(ctx context.Context, newsID int) (models.NewsF
 }
 
 // Метод для выборки новостей из БД с фильтрацией и пагинацией
-func (s *Storage) GetNewsByFilter(ctx context.Context, filter models.NewsFilter) ([]models.NewsFullDetailed, error) {
+func (s *Storage) GetFilteredNews(ctx context.Context, filter models.NewsFilter) ([]models.NewsFullDetailed, error) {
 	query := `
 	SELECT
 	news_id,
@@ -209,8 +208,71 @@ func (s *Storage) Close() {
 	s.isClosed = true
 }
 
-func (s *Storage) SaveNews(ctx context.Context, feed *domain.Feed) (int, error) {
-	if len(feed.Items) == 0 {
+func (s *Storage) GetNewsList(ctx context.Context, filter models.NewsFilter) ([]models.NewsFullDetailed, error) {
+	query := `
+	SELECT
+	news_id,
+	title,
+	description,
+	content,
+	author,
+	published_at,
+	sourse,
+	link,
+	FROM news
+	WHERE 1=1
+	`
+	args := []interface{}{}
+	argPos := 1
+
+	if filter.OrderBy != "" {
+		query += " ORDER BY " + filter.OrderBy
+	} else {
+		query += " ORDER BY published_at DESC"
+	}
+
+	if filter.Limit > 0 {
+		query += fmt.Sprintf(" LIMIT $%d", argPos)
+		args = append(args, filter.Limit)
+		argPos++
+	}
+
+	if filter.Offset > 0 {
+		query += fmt.Sprintf(" OFFSET $%d", argPos)
+		args = append(args, filter.Offset)
+		argPos++
+	}
+
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query news: %w", err)
+	}
+	defer rows.Close()
+
+	var newsList []models.NewsFullDetailed
+	for rows.Next() {
+		var news models.NewsFullDetailed
+		err := rows.Scan(
+			&news.NewsID,
+			&news.Title,
+			&news.Description,
+			&news.Content,
+			&news.Author,
+			&news.PublishedAt,
+			&news.Source,
+			&news.Link,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan news: %w", err)
+		}
+		newsList = append(newsList, news)
+	}
+
+	return newsList, nil
+}
+
+func (s *Storage) AddNews(ctx context.Context, news []models.NewsFullDetailed) (int, error) {
+	if len(news) == 0 {
 		return 0, nil
 	}
 	tx, err := s.db.Begin(ctx)
@@ -226,7 +288,7 @@ func (s *Storage) SaveNews(ctx context.Context, feed *domain.Feed) (int, error) 
 			panic(p)
 		} else if err != nil {
 			if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
-				s.log.Error("Failed to rollback transaction", "error", rollbackErr)
+				s.log.Error("failed to rollback transaction", "error", rollbackErr)
 				return
 			}
 		}
@@ -241,7 +303,7 @@ func (s *Storage) SaveNews(ctx context.Context, feed *domain.Feed) (int, error) 
 
 	//5. Обрабатываем новости из фида
 	savedCount := 0
-	for _, item := range feed.Items {
+	for _, item := range news {
 		content := item.Description
 
 		batch.Queue(
@@ -249,11 +311,10 @@ func (s *Storage) SaveNews(ctx context.Context, feed *domain.Feed) (int, error) 
 			item.Title,
 			item.Description,
 			content,
+			item.Author,
+			item.PublishedAt,
 			nil,
-			item.PubDate,
-			feed.Title,
 			item.Link,
-			nil,
 		)
 		savedCount++
 	}
@@ -271,10 +332,32 @@ func (s *Storage) SaveNews(ctx context.Context, feed *domain.Feed) (int, error) 
 
 	s.log.Info("News saved successfully",
 		slog.Int("items_saved", savedCount),
-		slog.String("source", feed.Title),
 	)
 
 	return savedCount, nil
+}
+
+func (s *Storage) NewsExists(ctx context.Context, newsID int) (bool, error) {
+	if newsID <= 0 {
+		return false, fmt.Errorf("news ID invalid parameter")
+	}
+
+	query := `
+	SELECT EXISTS(
+	SELECT 1 FROM news
+	WHERE id = $1
+	)
+	`
+	var exists bool
+	err := s.db.QueryRow(ctx, query, newsID).Scan(&exists)
+	if err != nil {
+		s.log.Error("failed to check news existance in database", "error", err, "newsID", newsID)
+		return false, fmt.Errorf("failed to check news existence: %w", err)
+	}
+
+	s.log.Debug("news existence checked", "news_id", newsID, "exists", exists)
+	return exists, nil
+
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
