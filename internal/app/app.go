@@ -25,7 +25,7 @@ import (
 func Run() error {
 	ctxmain := context.Background()
 
-	cfg, err := config.LoadConfig("config/dev.yaml")
+	cfg, err := config.LoadConfig("configs/dev.yaml")
 	if err != nil {
 		return fmt.Errorf("failed to loag config: %w", err)
 	}
@@ -51,7 +51,7 @@ func Run() error {
 	// Инициализация Kafka клиентов
 	kafkaBrokers := cfg.Kafka.Brokers
 	if len(kafkaBrokers) == 0 {
-		kafkaBrokers[0] = "kafka:9093"
+		kafkaBrokers = []string{"kafka:9093"}
 	}
 	consumer, err := kfk.NewConsumer(kafkaBrokers, "news_input")
 	if err != nil {

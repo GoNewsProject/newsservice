@@ -12,7 +12,7 @@ import (
 type AppConfig struct {
 	Name               string    `yaml:"name"`
 	ReadTimeout        int       `yaml:"read_timeout"`
-	WriteTimeout       int       `yaml:"writetimeout"`
+	WriteTimeout       int       `yaml:"write_timeout"`
 	ConnectTimeout     int       `yaml:"connect_timeout"`
 	ProcessingInterval int       `yaml:"processing_interval"`
 	FeedURLs           []FeedURL `yaml:"feed_urls"`
@@ -37,7 +37,7 @@ type DBConfig struct {
 	Host     string `yaml:"host"`
 	Port     string `yaml:"port"`
 	UserName string `yaml:"username"`
-	Password int    `yaml:"password"`
+	Password string `yaml:"password"`
 	DBName   string `yaml:"db_name"`
 	SSLMode  string `yaml:"sslmode"`
 }

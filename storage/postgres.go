@@ -21,10 +21,15 @@ type Storage struct {
 }
 
 func NewStorage(cfg config.Config, log *slog.Logger) (*Storage, error) {
-	connStr := fmt.Sprintf(
-		"postgres://%s:%s@%s:%d/%s?sslode=%s",
-		cfg.DB.Host, cfg.DB.Port, cfg.DB.UserName, cfg.DB.Password, cfg.DB.DBName, cfg.DB.SSLMode,
-	)
+    connStr := fmt.Sprintf(
+        "postgres://%s:%s@%s:%s/%s?sslmode=%s",
+        cfg.DB.UserName,
+        cfg.DB.Password,
+        cfg.DB.Host,
+        cfg.DB.Port,
+        cfg.DB.DBName,
+        cfg.DB.SSLMode,
+    )
 
 	db, err := pgxpool.New(context.Background(), connStr)
 	if err != nil {
