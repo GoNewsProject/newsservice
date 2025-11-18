@@ -3,7 +3,7 @@ app:
   read_timeout: 10
   write_timeout: 10
   connect_timeout: 10
-  processing_interval: "3m"
+  processing_interval: 3
   feed_urls:
     - name: dev.to
       url: https://dev.to/feed
@@ -16,15 +16,15 @@ app:
 
 http:
   host: 0.0.0.0
-  port: :6000
+  port: 6000
 
 logging:
   level: debug
   format: text
 
-database:
-  host: localhost
-  port: 5432
+db:
+  host: postgres-news
+  port: "5432"
   username: news
   password: password
   db_name: newsservice
@@ -32,7 +32,7 @@ database:
 
 kafka:
   brokers:
-    - localhost: 9092
+    - kafka:9093
   topics:
     news_input: news_input
     news_list: news_list
@@ -40,13 +40,14 @@ kafka:
     filtered_content: filtered_content
     filter_published: filter_published
   consumer_groups:
-  api_ateway: api_gateway
+    gnews: gnews
+    api_gateway: api_gateway
 
 service:
   address: ":6000"
 
 routes:
   - name: apigateway
-    base_url: http://localhot:8080
+    base_url: http://apigateway:8080
   - name: commentservice
-    base_url: http://localhost:7000    
+    base_url: http://commentservice:8081    

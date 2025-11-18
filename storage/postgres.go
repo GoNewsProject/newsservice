@@ -21,10 +21,15 @@ type Storage struct {
 }
 
 func NewStorage(cfg config.Config, log *slog.Logger) (*Storage, error) {
-	connStr := fmt.Sprintf(
-		"postgres://%s:%s@%s:%d/%s?sslode=%s",
-		cfg.DB.Host, cfg.DB.Port, cfg.DB.UserName, cfg.DB.Password, cfg.DB.DBName, cfg.DB.SSLMode,
-	)
+    connStr := fmt.Sprintf(
+        "postgres://%s:%s@%s:%s/%s?sslmode=%s",
+        cfg.DB.UserName,
+        cfg.DB.Password,
+        cfg.DB.Host,
+        cfg.DB.Port,
+        cfg.DB.DBName,
+        cfg.DB.SSLMode,
+    )
 
 	db, err := pgxpool.New(context.Background(), connStr)
 	if err != nil {
@@ -106,7 +111,7 @@ func (s *Storage) GetDetailedNews(ctx context.Context, newsID int) (models.NewsF
 }
 
 // Метод для выборки новостей из БД с фильтрацией и пагинацией
-func (s *Storage) GetNewsByFilter(ctx context.Context, filter models.NewsFilter) ([]models.NewsFullDetailed, error) {
+func (s *Storage) GetFilteredNews(ctx context.Context, filter models.NewsFilter) ([]models.NewsFullDetailed, error) {
 	query := `
 	SELECT
 	news_id,
@@ -208,7 +213,157 @@ func (s *Storage) Close() {
 	s.isClosed = true
 }
 
-// TO DO: func (s *Storage) SaveNews(ctx context.Context, feed *domain.Feed) (int, error)
+func (s *Storage) GetNewsList(ctx context.Context, filter models.NewsFilter) ([]models.NewsFullDetailed, error) {
+	query := `
+	SELECT
+	news_id,
+	title,
+	description,
+	content,
+	author,
+	published_at,
+	sourse,
+	link,
+	FROM news
+	WHERE 1=1
+	`
+	args := []interface{}{}
+	argPos := 1
+
+	if filter.OrderBy != "" {
+		query += " ORDER BY " + filter.OrderBy
+	} else {
+		query += " ORDER BY published_at DESC"
+	}
+
+	if filter.Limit > 0 {
+		query += fmt.Sprintf(" LIMIT $%d", argPos)
+		args = append(args, filter.Limit)
+		argPos++
+	}
+
+	if filter.Offset > 0 {
+		query += fmt.Sprintf(" OFFSET $%d", argPos)
+		args = append(args, filter.Offset)
+		argPos++
+	}
+
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query news: %w", err)
+	}
+	defer rows.Close()
+
+	var newsList []models.NewsFullDetailed
+	for rows.Next() {
+		var news models.NewsFullDetailed
+		err := rows.Scan(
+			&news.NewsID,
+			&news.Title,
+			&news.Description,
+			&news.Content,
+			&news.Author,
+			&news.PublishedAt,
+			&news.Source,
+			&news.Link,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan news: %w", err)
+		}
+		newsList = append(newsList, news)
+	}
+
+	return newsList, nil
+}
+
+func (s *Storage) AddNews(ctx context.Context, news []models.NewsFullDetailed) (int, error) {
+	if len(news) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		s.log.Error("failed to start transaction", "error", err)
+		return 0, fmt.Errorf("failed to start transaction: %w", err)
+	}
+
+	//3. Обрабатываем ошибки и паники
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback(ctx)
+			panic(p)
+		} else if err != nil {
+			if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+				s.log.Error("failed to rollback transaction", "error", rollbackErr)
+				return
+			}
+		}
+	}()
+
+	batch := &pgx.Batch{}
+	query := `
+	INSERT INTO news(
+	title, description, content, author, published_at, source, link)
+	VALUES($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (link) DO NOTHING);
+	`
+
+	//5. Обрабатываем новости из фида
+	savedCount := 0
+	for _, item := range news {
+		content := item.Description
+
+		batch.Queue(
+			query,
+			item.Title,
+			item.Description,
+			content,
+			item.Author,
+			item.PublishedAt,
+			nil,
+			item.Link,
+		)
+		savedCount++
+	}
+	//6. Выполняем batch
+	batchResult := tx.SendBatch(ctx, batch)
+	if err := batchResult.Close(); err != nil {
+		s.log.Error("Failed to execute batch", "error", err)
+		return 0, fmt.Errorf("failed to execute batch: %w", err)
+	}
+	//7. Фиксируем транзакцию
+	if err := tx.Commit(ctx); err != nil {
+		s.log.Error("Failed to commit transaction", "error", err)
+		return 0, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	s.log.Info("News saved successfully",
+		slog.Int("items_saved", savedCount),
+	)
+
+	return savedCount, nil
+}
+
+func (s *Storage) NewsExists(ctx context.Context, newsID int) (bool, error) {
+	if newsID <= 0 {
+		return false, fmt.Errorf("news ID invalid parameter")
+	}
+
+	query := `
+	SELECT EXISTS(
+	SELECT 1 FROM news
+	WHERE id = $1
+	)
+	`
+	var exists bool
+	err := s.db.QueryRow(ctx, query, newsID).Scan(&exists)
+	if err != nil {
+		s.log.Error("failed to check news existance in database", "error", err, "newsID", newsID)
+		return false, fmt.Errorf("failed to check news existence: %w", err)
+	}
+
+	s.log.Debug("news existence checked", "news_id", newsID, "exists", exists)
+	return exists, nil
+
+}
 
 // ---------------------------------------------------------------------------------------------------------------------------
 // Метод для выборки из БД всех новостей
